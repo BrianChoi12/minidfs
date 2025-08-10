@@ -74,6 +74,10 @@ set(GRPC_DEPS
 # Find OpenSSL for checksums
 find_package(OpenSSL REQUIRED)
 
+# Find Google Test
+find_package(GTest REQUIRED)
+include(GoogleTest)
+
 # === Targets ===
 add_executable(minidfs_metaserver
     ${METASERVER_SRC}
@@ -111,3 +115,123 @@ target_include_directories(minidfs_client PRIVATE
     common
 )
 target_link_libraries(minidfs_client PRIVATE ${GRPC_DEPS})
+
+# === Test Files ===
+file(GLOB_RECURSE TEST_UTILS_SRC tests/utils/*.cpp)
+file(GLOB_RECURSE UNIT_TEST_SRC tests/unit/*.cpp)
+file(GLOB_RECURSE INTEGRATION_TEST_SRC tests/integration/*.cpp)
+file(GLOB_RECURSE E2E_TEST_SRC tests/e2e/*.cpp)
+
+# === Test Utilities Library ===
+add_library(minidfs_test_utils STATIC
+    ${TEST_UTILS_SRC}
+    ${METASERVER_SRC}
+    ${CLIENT_SRC}
+    ${DATANODE_SRC}
+    ${GENERATED_SRC}
+)
+target_include_directories(minidfs_test_utils PUBLIC
+    ${GEN_SRC_DIR}
+    proto
+    common
+    metaserver
+    datanode
+    client
+    tests/utils
+)
+target_link_libraries(minidfs_test_utils PUBLIC 
+    ${GRPC_DEPS} 
+    OpenSSL::SSL 
+    OpenSSL::Crypto
+    GTest::gtest
+)
+
+# === Unit Tests ===
+add_executable(unit_tests
+    ${UNIT_TEST_SRC}
+)
+target_include_directories(unit_tests PRIVATE
+    ${GEN_SRC_DIR}
+    proto
+    common
+    metaserver
+    datanode
+    client
+    tests/utils
+)
+target_link_libraries(unit_tests PRIVATE 
+    minidfs_test_utils
+    GTest::gtest_main
+)
+
+# === Integration Tests ===
+add_executable(integration_tests
+    ${INTEGRATION_TEST_SRC}
+)
+target_include_directories(integration_tests PRIVATE
+    ${GEN_SRC_DIR}
+    proto
+    common
+    metaserver
+    datanode
+    client
+    tests/utils
+)
+target_link_libraries(integration_tests PRIVATE 
+    minidfs_test_utils
+    GTest::gtest_main
+)
+
+# === End-to-End Tests ===
+add_executable(e2e_tests
+    ${E2E_TEST_SRC}
+)
+target_include_directories(e2e_tests PRIVATE
+    ${GEN_SRC_DIR}
+    proto
+    common
+    metaserver
+    datanode
+    client
+    tests/utils
+)
+target_link_libraries(e2e_tests PRIVATE 
+    minidfs_test_utils
+    GTest::gtest_main
+)
+
+# === Test Discovery ===
+gtest_discover_tests(unit_tests)
+gtest_discover_tests(integration_tests)
+gtest_discover_tests(e2e_tests)
+
+# === Custom Test Targets ===
+add_custom_target(test_all
+    COMMAND ${CMAKE_CTEST_COMMAND} --verbose
+    DEPENDS unit_tests integration_tests e2e_tests
+    COMMENT "Running all MiniDFS tests"
+)
+
+add_custom_target(test_unit
+    COMMAND unit_tests
+    DEPENDS unit_tests
+    COMMENT "Running unit tests"
+)
+
+add_custom_target(test_integration
+    COMMAND integration_tests
+    DEPENDS integration_tests
+    COMMENT "Running integration tests"
+)
+
+add_custom_target(test_e2e
+    COMMAND e2e_tests
+    DEPENDS e2e_tests
+    COMMENT "Running end-to-end tests"
+)
+
+add_custom_target(test_performance
+    COMMAND e2e_tests --gtest_filter="PerformanceTest*"
+    DEPENDS e2e_tests
+    COMMENT "Running performance tests"
+)
