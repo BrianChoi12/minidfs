@@ -60,10 +60,26 @@ foreach(PROTO_FILE ${PROTO_FILES})
 endforeach()
 
 # === Source files ===
-file(GLOB_RECURSE METASERVER_SRC metaserver/*.cpp)
-file(GLOB_RECURSE DATANODE_SRC datanode/*.cpp)
-file(GLOB_RECURSE CLIENT_SRC client/*.cpp)
-file(GLOB_RECURSE COMMON_SRC common/*.cpp)
+set(METASERVER_SRC
+    metaserver/cache.cpp
+    metaserver/main.cpp
+    metaserver/manager.cpp
+    metaserver/server.cpp
+)
+
+set(DATANODE_SRC
+    datanode/main.cpp
+    datanode/storage.cpp
+)
+
+set(CLIENT_SRC
+    client/main.cpp
+    client/mini_dfs_client.cpp
+)
+
+set(COMMON_SRC
+    # No common source files currently
+)
 
 # === Libraries ===
 set(GRPC_DEPS
@@ -117,10 +133,23 @@ target_include_directories(minidfs_client PRIVATE
 target_link_libraries(minidfs_client PRIVATE ${GRPC_DEPS})
 
 # === Test Files ===
-file(GLOB_RECURSE TEST_UTILS_SRC tests/utils/*.cpp)
-file(GLOB_RECURSE UNIT_TEST_SRC tests/unit/*.cpp)
-file(GLOB_RECURSE INTEGRATION_TEST_SRC tests/integration/*.cpp)
-file(GLOB_RECURSE E2E_TEST_SRC tests/e2e/*.cpp)
+set(TEST_UTILS_SRC
+    tests/utils/test_utils.cpp
+)
+
+set(UNIT_TEST_SRC
+    tests/unit/cache_test.cpp
+    tests/unit/storage_test.cpp
+)
+
+set(INTEGRATION_TEST_SRC
+    tests/integration/metaserver_test.cpp
+)
+
+set(E2E_TEST_SRC
+    tests/e2e/full_system_test.cpp
+    tests/e2e/performance_test.cpp
+)
 
 # === Test Utilities Library ===
 # Exclude main.cpp files from test utilities
