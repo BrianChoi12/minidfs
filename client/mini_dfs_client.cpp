@@ -4,6 +4,7 @@
 #include <grpcpp/grpcpp.h>
 #include <sstream>
 #include <iomanip>
+#include <filesystem>
 
 constexpr size_t CHUNK_SIZE = 1024 * 1024; // 1 MB Chunks
 
@@ -32,11 +33,34 @@ void MiniDfsClient::UploadFile(const std::string& fileName) {
 
     std::cout << "[INFO] File split into " << chunks.size() << " chunks\n";
 
+    // Extract just the filename (not the full path) for MetaServer storage
+    std::string filename_only = std::filesystem::path(fileName).filename().string();
+
+    // Handle empty files by registering them with MetaServer
+    if (chunks.empty()) {
+        ChunkAllocationRequest allocRequest;
+        allocRequest.set_filename(filename_only);
+        allocRequest.set_chunk_index(0);
+        allocRequest.set_chunk_size(0);
+
+        ChunkLocation chunkLocation;
+        grpc::ClientContext allocContext;
+        grpc::Status allocStatus = theStub.AllocateChunkLocation(&allocContext, allocRequest, &chunkLocation);
+
+        if (!allocStatus.ok()) {
+            std::cerr << "[ERROR] Failed to register empty file with MetaServer: " 
+                      << allocStatus.error_message() << "\n";
+            return;
+        }
+
+        std::cout << "[SUCCESS] Empty file registered with MetaServer\n";
+    }
+
     // For each chunk, request allocation from MetaServer and upload to DataNode
     for (size_t i = 0; i < chunks.size(); ++i) {
         // Request chunk allocation from MetaServer
         ChunkAllocationRequest allocRequest;
-        allocRequest.set_filename(fileName);
+        allocRequest.set_filename(filename_only);
         allocRequest.set_chunk_index(i);
         allocRequest.set_chunk_size(chunks[i].size());
 
@@ -115,8 +139,19 @@ void MiniDfsClient::DownloadFile(const std::string& fileName) {
         return;
     }
 
+    // Handle empty files (0 chunks is valid)
     if (response.chunks_size() == 0) {
-        std::cerr << "[ERROR] File has no chunks: " << fileName << "\n";
+        std::cout << "[INFO] Downloading empty file: " << fileName << "\n";
+        
+        // Create empty output file
+        std::ofstream outFile(fileName, std::ios::binary);
+        if (!outFile.is_open()) {
+            std::cerr << "[ERROR] Cannot create output file: " << fileName << "\n";
+            return;
+        }
+        outFile.close();
+        
+        std::cout << "[SUCCESS] Download completed for empty file: " << fileName << "\n";
         return;
     }
 

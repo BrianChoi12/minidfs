@@ -52,9 +52,9 @@ public:
     }
 
     Status GetFileLocation(ServerContext* context, const ::FileLocationRequest* request, ::FileLocationResponse* response) {
-        auto locations = theManager->getFileLocation(request->filename());
+        auto [found, locations] = theManager->getFileLocation(request->filename());
         
-        if (locations.empty()) {
+        if (!found) {
             response->set_found(false);
             return Status::OK;
         }

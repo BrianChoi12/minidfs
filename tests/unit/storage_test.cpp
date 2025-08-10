@@ -1,12 +1,15 @@
 #include <gtest/gtest.h>
 #include "storage.hpp"
-#include "../utils/test_utils.hpp"
+#include "unit_test_utils.hpp"
 #include <filesystem>
+#include <iostream>
+#include <thread>
+#include <atomic>
 
 class StorageTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        temp_dir_ = std::make_unique<test_utils::TempDirectory>();
+        temp_dir_ = std::make_unique<unit_test_utils::TempDirectory>();
         storage_ = std::make_unique<DataNodeStorage>(temp_dir_->path(), 10 * 1024 * 1024); // 10MB capacity
     }
     
@@ -14,7 +17,7 @@ protected:
         storage_.reset(); // Destroy storage before cleaning up directory
     }
     
-    std::unique_ptr<test_utils::TempDirectory> temp_dir_;
+    std::unique_ptr<unit_test_utils::TempDirectory> temp_dir_;
     std::unique_ptr<DataNodeStorage> storage_;
 };
 
@@ -37,13 +40,13 @@ TEST_F(StorageTest, StoreAndReadSmallChunk) {
 
 TEST_F(StorageTest, StoreLargeChunk) {
     std::string chunk_id = "large_chunk";
-    auto data = test_utils::generateRandomData(1024 * 1024); // 1MB
+    auto data = unit_test_utils::generateRandomData(1024 * 1024); // 1MB
     
     EXPECT_TRUE(storage_->storeChunk(chunk_id, data));
     EXPECT_TRUE(storage_->hasChunk(chunk_id));
     
     auto read_data = storage_->readChunk(chunk_id);
-    test_utils::expectDataEqual(data, read_data);
+    unit_test_utils::expectDataEqual(data, read_data);
 }
 
 TEST_F(StorageTest, StoreZeroSizeChunk) {
@@ -71,7 +74,7 @@ TEST_F(StorageTest, OverwriteExistingChunk) {
     
     // Verify new data
     auto read_data = storage_->readChunk(chunk_id);
-    test_utils::expectDataEqual(data2, read_data);
+    unit_test_utils::expectDataEqual(data2, read_data);
     
     // Verify used space is updated correctly
     auto final_used = storage_->getUsedSpace();
@@ -85,7 +88,7 @@ TEST_F(StorageTest, ReadNonExistentChunk) {
 
 TEST_F(StorageTest, DeleteChunk) {
     std::string chunk_id = "delete_test";
-    auto data = test_utils::generateRandomData(1024);
+    auto data = unit_test_utils::generateRandomData(1024);
     
     // Store and verify
     EXPECT_TRUE(storage_->storeChunk(chunk_id, data));
@@ -114,15 +117,15 @@ TEST_F(StorageTest, CapacityManagement) {
     auto small_storage = std::make_unique<DataNodeStorage>(temp_dir_->path() + "/small", 100);
     
     // Try to store chunk larger than capacity
-    auto large_data = test_utils::generateRandomData(200);
+    auto large_data = unit_test_utils::generateRandomData(200);
     EXPECT_FALSE(small_storage->storeChunk("too_large", large_data));
     
     // Store chunk that fits
-    auto small_data = test_utils::generateRandomData(50);
+    auto small_data = unit_test_utils::generateRandomData(50);
     EXPECT_TRUE(small_storage->storeChunk("fits", small_data));
     
     // Try to store another chunk that would exceed capacity
-    auto another_data = test_utils::generateRandomData(60);
+    auto another_data = unit_test_utils::generateRandomData(60);
     EXPECT_FALSE(small_storage->storeChunk("too_much", another_data));
 }
 
@@ -134,8 +137,8 @@ TEST_F(StorageTest, SpaceTracking) {
     EXPECT_EQ(initial_available, 10 * 1024 * 1024); // 10MB
     
     // Store some chunks
-    auto data1 = test_utils::generateRandomData(1024);
-    auto data2 = test_utils::generateRandomData(2048);
+    auto data1 = unit_test_utils::generateRandomData(1024);
+    auto data2 = unit_test_utils::generateRandomData(2048);
     
     EXPECT_TRUE(storage_->storeChunk("chunk1", data1));
     EXPECT_TRUE(storage_->storeChunk("chunk2", data2));
@@ -173,7 +176,7 @@ TEST_F(StorageTest, GetStoredChunkIds) {
     
     // Store some chunks
     std::vector<std::string> expected_ids = {"chunk1", "chunk2", "chunk3"};
-    auto data = test_utils::generateRandomData(100);
+    auto data = unit_test_utils::generateRandomData(100);
     
     for (const auto& id : expected_ids) {
         EXPECT_TRUE(storage_->storeChunk(id, data));
@@ -194,7 +197,7 @@ TEST_F(StorageTest, HealthCheck) {
     EXPECT_TRUE(storage_->performHealthCheck());
     
     // Store a chunk
-    auto data = test_utils::generateRandomData(100);
+    auto data = unit_test_utils::generateRandomData(100);
     EXPECT_TRUE(storage_->storeChunk("health_test", data));
     EXPECT_TRUE(storage_->performHealthCheck());
     
@@ -210,7 +213,7 @@ TEST_F(StorageTest, HealthCheck) {
 
 TEST_F(StorageTest, PersistenceAcrossInstances) {
     std::string chunk_id = "persistent_chunk";
-    auto data = test_utils::generateRandomData(1024);
+    auto data = unit_test_utils::generateRandomData(1024);
     
     // Store chunk in first instance
     EXPECT_TRUE(storage_->storeChunk(chunk_id, data));
@@ -224,7 +227,7 @@ TEST_F(StorageTest, PersistenceAcrossInstances) {
     // Verify chunk is still there
     EXPECT_TRUE(storage_->hasChunk(chunk_id));
     auto read_data = storage_->readChunk(chunk_id);
-    test_utils::expectDataEqual(data, read_data);
+    unit_test_utils::expectDataEqual(data, read_data);
     
     // Verify space tracking is restored
     EXPECT_EQ(storage_->getUsedSpace(), static_cast<int64_t>(data.size()));
@@ -238,7 +241,7 @@ TEST_F(StorageTest, DirectoryStructure) {
         "ff123"   // Should go in ff/ subdirectory
     };
     
-    auto data = test_utils::generateRandomData(100);
+    auto data = unit_test_utils::generateRandomData(100);
     
     for (const auto& chunk_id : chunk_ids) {
         EXPECT_TRUE(storage_->storeChunk(chunk_id, data));
@@ -269,7 +272,7 @@ TEST_F(StorageTest, ConcurrentOperations) {
         threads.emplace_back([&, t]() {
             for (int i = 0; i < chunks_per_thread; ++i) {
                 std::string chunk_id = "thread_" + std::to_string(t) + "_chunk_" + std::to_string(i);
-                auto data = test_utils::generateRandomData(100 + i); // Variable size
+                auto data = unit_test_utils::generateRandomData(100 + i); // Variable size
                 
                 if (storage_->storeChunk(chunk_id, data)) {
                     successful_stores++;

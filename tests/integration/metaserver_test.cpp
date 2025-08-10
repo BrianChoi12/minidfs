@@ -169,9 +169,9 @@ TEST_F(MetaServerTest, FileLocationAfterChunkAllocation) {
     EXPECT_EQ(locations.size(), num_chunks);
     
     for (size_t i = 0; i < locations.size(); ++i) {
-        EXPECT_EQ(locations[i].chunk_id, expected_chunk_ids[i]);
-        EXPECT_EQ(locations[i].datanode_addresses.size(), 1);
-        EXPECT_EQ(locations[i].datanode_addresses[0], "localhost:50052");
+        EXPECT_EQ(locations[i].chunk_id(), expected_chunk_ids[i]);
+        EXPECT_EQ(locations[i].datanode_addresses_size(), 1);
+        EXPECT_EQ(locations[i].datanode_addresses(0), "localhost:50052");
     }
 }
 

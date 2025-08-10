@@ -65,7 +65,7 @@ public:
         int32_t chunk_index, 
         int64_t chunk_size);
     
-    std::vector<ChunkLocationInfo> getFileLocation(const std::string& filename);
+    std::pair<bool, std::vector<ChunkLocationInfo>> getFileLocation(const std::string& filename);
     
     // Utility
     void removeDataNode(const std::string& address);

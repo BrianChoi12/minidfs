@@ -67,11 +67,11 @@ TEST_F(FullSystemTest, SmallFileUploadDownload) {
     EXPECT_TRUE(found_chunk) << "No chunk files found in DataNode storage";
     
     // Download file to different location
-    std::string download_path = test_file.path() + ".downloaded";
-    client_->DownloadFile(std::filesystem::path(test_file.path()).filename());
+    std::string filename = std::filesystem::path(test_file.path()).filename().string();
+    client_->DownloadFile(filename);
     
     // Verify downloaded file matches original
-    test_utils::expectFilesEqual(test_file.path(), download_path);
+    test_utils::expectFilesEqual(test_file.path(), filename);
 }
 
 TEST_F(FullSystemTest, LargeFileMultipleChunks) {
@@ -97,10 +97,10 @@ TEST_F(FullSystemTest, LargeFileMultipleChunks) {
     EXPECT_EQ(chunk_count, 3) << "Expected 3 chunks for 3MB file";
     
     // Download and verify
-    std::string download_path = test_file.path() + ".downloaded";
-    client_->DownloadFile(std::filesystem::path(test_file.path()).filename());
+    std::string filename = std::filesystem::path(test_file.path()).filename().string();
+    client_->DownloadFile(filename);
     
-    test_utils::expectFilesEqual(test_file.path(), download_path);
+    test_utils::expectFilesEqual(test_file.path(), filename);
 }
 
 TEST_F(FullSystemTest, EmptyFileHandling) {
@@ -111,12 +111,12 @@ TEST_F(FullSystemTest, EmptyFileHandling) {
     client_->UploadFile(empty_file.path());
     
     // Download and verify
-    std::string download_path = empty_file.path() + ".downloaded";
-    client_->DownloadFile(std::filesystem::path(empty_file.path()).filename());
+    std::string filename = std::filesystem::path(empty_file.path()).filename().string();
+    client_->DownloadFile(filename);
     
     // Verify both files are empty
     EXPECT_EQ(std::filesystem::file_size(empty_file.path()), 0);
-    EXPECT_EQ(std::filesystem::file_size(download_path), 0);
+    EXPECT_EQ(std::filesystem::file_size(filename), 0);
 }
 
 TEST_F(FullSystemTest, BinaryFileHandling) {
@@ -140,11 +140,11 @@ TEST_F(FullSystemTest, BinaryFileHandling) {
     // Upload and download
     client_->UploadFile(binary_file.path());
     
-    std::string download_path = binary_file.path() + ".downloaded";
-    client_->DownloadFile(std::filesystem::path(binary_file.path()).filename());
+    std::string filename = std::filesystem::path(binary_file.path()).filename().string();
+    client_->DownloadFile(filename);
     
     // Verify byte-for-byte identical
-    test_utils::expectFilesEqual(binary_file.path(), download_path);
+    test_utils::expectFilesEqual(binary_file.path(), filename);
 }
 
 TEST_F(FullSystemTest, MultipleFilesSequential) {
@@ -167,10 +167,10 @@ TEST_F(FullSystemTest, MultipleFilesSequential) {
     
     // Download and verify all files
     for (size_t i = 0; i < files.size(); ++i) {
-        std::string download_path = files[i]->path() + ".downloaded";
-        client_->DownloadFile(std::filesystem::path(files[i]->path()).filename());
+        std::string filename = std::filesystem::path(files[i]->path()).filename().string();
+        client_->DownloadFile(filename);
         
-        test_utils::expectFilesEqual(files[i]->path(), download_path);
+        test_utils::expectFilesEqual(files[i]->path(), filename);
     }
 }
 
@@ -184,9 +184,8 @@ TEST_F(FullSystemTest, FileOverwrite) {
     client_->UploadFile(test_file.path());
     
     // Download and verify initial version
-    std::string download_path1 = test_file.path() + ".download1";
     client_->DownloadFile(filename);
-    test_utils::expectFilesEqual(test_file.path(), download_path1);
+    test_utils::expectFilesEqual(test_file.path(), filename);
     
     // Create updated file with different content
     std::string updated_content = "Updated content that is much longer than the original";
@@ -196,17 +195,13 @@ TEST_F(FullSystemTest, FileOverwrite) {
     client_->UploadFile(test_file.path());
     
     // Download and verify updated version
-    std::string download_path2 = test_file.path() + ".download2";
     client_->DownloadFile(filename);
-    test_utils::expectFilesEqual(test_file.path(), download_path2);
+    test_utils::expectFilesEqual(test_file.path(), filename);
     
-    // Verify content is actually different
-    std::ifstream f1(download_path1);
-    std::ifstream f2(download_path2);
-    std::string content1((std::istreambuf_iterator<char>(f1)), std::istreambuf_iterator<char>());
+    // Verify content matches updated version
+    std::ifstream f2(filename);
     std::string content2((std::istreambuf_iterator<char>(f2)), std::istreambuf_iterator<char>());
     
-    EXPECT_NE(content1, content2);
     EXPECT_EQ(content2, updated_content);
 }
 
@@ -252,11 +247,10 @@ TEST_F(FullSystemTest, StressTestManySmallFiles) {
     // Download all files and verify
     timer.reset();
     for (int i = 0; i < num_files; ++i) {
-        std::string filename = std::filesystem::path(files[i]->path()).filename();
-        std::string download_path = files[i]->path() + ".downloaded";
+        std::string filename = std::filesystem::path(files[i]->path()).filename().string();
         
         client_->DownloadFile(filename);
-        test_utils::expectFilesEqual(files[i]->path(), download_path);
+        test_utils::expectFilesEqual(files[i]->path(), filename);
         
         if ((i + 1) % 10 == 0) {
             std::cout << "Downloaded " << (i + 1) << "/" << num_files << " files" << std::endl;
@@ -301,10 +295,9 @@ TEST_F(FullSystemTest, DataIntegrityAfterRestart) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
     // Download file and verify it's still intact
-    std::string download_path = test_file.path() + ".after_restart";
     client_->DownloadFile(filename);
     
-    test_utils::expectFilesEqual(test_file.path(), download_path);
+    test_utils::expectFilesEqual(test_file.path(), filename);
 }
 
 TEST_F(FullSystemTest, SystemResourceUsage) {

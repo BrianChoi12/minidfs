@@ -147,12 +147,19 @@ std::pair<std::string, std::vector<std::string>> Manager::allocateChunkLocation(
     // Generate unique chunk ID
     std::string chunk_id = generateChunkId(filename, chunk_index);
     
-    // Select DataNode for this chunk
-    std::string selected_node = selectDataNodeForChunk(chunk_size);
-    
-    if (selected_node.empty()) {
-        std::cerr << "[ERROR] No available DataNode for chunk allocation\n";
-        return {"", {}};
+    // Handle empty files (chunk_size == 0)
+    std::string selected_node;
+    if (chunk_size > 0) {
+        // Select DataNode for this chunk
+        selected_node = selectDataNodeForChunk(chunk_size);
+        
+        if (selected_node.empty()) {
+            std::cerr << "[ERROR] No available DataNode for chunk allocation\n";
+            return {"", {}};
+        }
+    } else {
+        // For empty files, we still need to store metadata but don't need a DataNode
+        selected_node = "";  // No DataNode needed for empty chunks
     }
     
     // Update file metadata
@@ -160,10 +167,17 @@ std::pair<std::string, std::vector<std::string>> Manager::allocateChunkLocation(
         std::lock_guard<std::mutex> lock(files_mutex);
         auto& file_meta = files[filename];
         
-        if (file_meta.chunk_ids.size() <= static_cast<size_t>(chunk_index)) {
-            file_meta.chunk_ids.resize(chunk_index + 1);
+        if (chunk_size > 0) {
+            // Only resize and assign chunk_id for non-empty chunks
+            if (file_meta.chunk_ids.size() <= static_cast<size_t>(chunk_index)) {
+                file_meta.chunk_ids.resize(chunk_index + 1);
+            }
+            file_meta.chunk_ids[chunk_index] = chunk_id;
+        } else {
+            // For empty files, ensure chunk_ids is empty but file metadata exists
+            file_meta.chunk_ids.clear();
         }
-        file_meta.chunk_ids[chunk_index] = chunk_id;
+        
         file_meta.filename = filename;
         file_meta.total_size += chunk_size;
         
@@ -172,18 +186,20 @@ std::pair<std::string, std::vector<std::string>> Manager::allocateChunkLocation(
         }
     }
     
-    // Reserve this chunk for the selected DataNode
-    {
-        std::lock_guard<std::mutex> lock(chunks_mutex);
-        chunk_to_datanodes[chunk_id] = {selected_node};
-    }
-    
-    // Update DataNode's expected load
-    {
-        std::lock_guard<std::mutex> lock(datanodes_mutex);
-        if (datanodes.find(selected_node) != datanodes.end()) {
-            datanodes[selected_node].current_load++;
-            datanodes[selected_node].available_space -= chunk_size;
+    // Reserve this chunk for the selected DataNode (only for non-empty chunks)
+    if (chunk_size > 0 && !selected_node.empty()) {
+        {
+            std::lock_guard<std::mutex> lock(chunks_mutex);
+            chunk_to_datanodes[chunk_id] = {selected_node};
+        }
+        
+        // Update DataNode's expected load
+        {
+            std::lock_guard<std::mutex> lock(datanodes_mutex);
+            if (datanodes.find(selected_node) != datanodes.end()) {
+                datanodes[selected_node].current_load++;
+                datanodes[selected_node].available_space -= chunk_size;
+            }
         }
     }
     
@@ -191,10 +207,15 @@ std::pair<std::string, std::vector<std::string>> Manager::allocateChunkLocation(
               << " for file " << filename 
               << " (index " << chunk_index << ") to DataNode " << selected_node << "\n";
     
-    return {chunk_id, {selected_node}};
+    // Return appropriate values for empty vs non-empty files
+    if (chunk_size > 0) {
+        return {chunk_id, {selected_node}};
+    } else {
+        return {chunk_id, {}};  // Empty DataNode list for empty files
+    }
 }
 
-std::vector<ChunkLocationInfo> Manager::getFileLocation(const std::string& filename) {
+std::pair<bool, std::vector<ChunkLocationInfo>> Manager::getFileLocation(const std::string& filename) {
     std::vector<ChunkLocationInfo> locations;
     
     // Check if file exists
@@ -203,7 +224,7 @@ std::vector<ChunkLocationInfo> Manager::getFileLocation(const std::string& filen
         std::lock_guard<std::mutex> lock(files_mutex);
         auto it = files.find(filename);
         if (it == files.end()) {
-            return locations;  // File not found
+            return {false, locations};  // File not found
         }
         chunk_ids = it->second.chunk_ids;
     }
@@ -246,7 +267,7 @@ std::vector<ChunkLocationInfo> Manager::getFileLocation(const std::string& filen
         }
     }
     
-    return locations;
+    return {true, locations};
 }
 
 void Manager::removeDataNode(const std::string& address) {

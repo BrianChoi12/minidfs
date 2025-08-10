@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include "cache.hpp"
-#include "../utils/test_utils.hpp"
+#include "unit_test_utils.hpp"
+#include <thread>
+#include <atomic>
 
 class CacheTest : public ::testing::Test {
 protected:

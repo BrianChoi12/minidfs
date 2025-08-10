@@ -9,6 +9,7 @@
 #include <chrono>
 #include <grpcpp/grpcpp.h>
 #include "dfs.grpc.pb.h"
+#include "cache.hpp"
 
 namespace test_utils {
 
@@ -59,12 +60,16 @@ public:
     virtual std::string address() const = 0;
 };
 
+// Forward declare for TestMetaServer
+class TestRPCServiceImpl;
+
 class TestMetaServer : public TestServer {
 private:
     std::unique_ptr<grpc::Server> server_;
     std::thread server_thread_;
     std::string address_;
     std::atomic<bool> running_{false};
+    std::unique_ptr<TestRPCServiceImpl> service_;
     
 public:
     explicit TestMetaServer(const std::string& address = "localhost:0");
@@ -76,6 +81,9 @@ public:
     std::string address() const override;
 };
 
+// Forward declare for TestDataNode
+class TestDataNodeServiceImpl;
+
 class TestDataNode : public TestServer {
 private:
     std::unique_ptr<grpc::Server> server_;
@@ -85,6 +93,7 @@ private:
     std::string metaserver_addr_;
     std::string storage_path_;
     std::atomic<bool> running_{false};
+    std::unique_ptr<TestDataNodeServiceImpl> service_;
     
 public:
     TestDataNode(const std::string& address = "localhost:0",
@@ -115,7 +124,7 @@ public:
     bool allocateChunk(const std::string& filename, int chunk_index, 
                       int64_t chunk_size, std::string& chunk_id, 
                       std::vector<std::string>& datanode_addrs);
-    std::vector<ChunkLocationInfo> getFileLocation(const std::string& filename);
+    std::vector<ChunkLocation> getFileLocation(const std::string& filename);
 };
 
 // Assertion utilities

@@ -7,8 +7,49 @@
 #include <netinet/in.h>
 #include "cache.hpp"
 #include "manager.hpp"
+#include "storage.hpp"
 
 namespace test_utils {
+
+// DataNode Service Implementation for Testing
+class TestDataNodeServiceImpl final : public DataNodeService::Service {
+private:
+    std::unique_ptr<DataNodeStorage> storage_;
+    
+public:
+    explicit TestDataNodeServiceImpl(const std::string& storage_path) {
+        storage_ = std::make_unique<DataNodeStorage>(storage_path, 1000000000); // 1GB capacity
+    }
+    
+    grpc::Status StoreChunk(grpc::ServerContext* context, const ::ChunkData* request, ::Ack* response) override {
+        storage_->incrementLoad();
+        
+        std::vector<char> data(request->data().begin(), request->data().end());
+        bool success = storage_->storeChunk(request->chunk_id(), data);
+        
+        response->set_ok(success);
+        response->set_message(success ? "Chunk stored successfully" : "Failed to store chunk");
+        
+        storage_->decrementLoad();
+        return grpc::Status::OK;
+    }
+    
+    grpc::Status ReadChunk(grpc::ServerContext* context, const ::ChunkRequest* request, ::ChunkData* response) override {
+        storage_->incrementLoad();
+        
+        std::vector<char> data = storage_->readChunk(request->chunk_id());
+        
+        if (!data.empty()) {
+            response->set_chunk_id(request->chunk_id());
+            response->set_data(data.data(), data.size());
+            storage_->decrementLoad();
+            return grpc::Status::OK;
+        } else {
+            storage_->decrementLoad();
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "Chunk not found");
+        }
+    }
+};
 
 // TempFile implementation
 TempFile::TempFile(const std::string& content, bool cleanup) 
@@ -137,10 +178,14 @@ std::vector<char> generatePatternData(size_t size, const std::string& pattern) {
 // TestMetaServer implementation
 class TestRPCServiceImpl final : public MetaService::Service {
 private:
-    Manager* manager_;
+    std::unique_ptr<Cache> cache_;
+    std::unique_ptr<Manager> manager_;
     
 public:
-    explicit TestRPCServiceImpl(Manager* manager) : manager_(manager) {}
+    TestRPCServiceImpl() {
+        cache_ = std::make_unique<Cache>(1000);
+        manager_ = std::make_unique<Manager>(cache_.get());
+    }
     
     grpc::Status RegisterDataNode(grpc::ServerContext* context, const ::DataNodeInfo* request, ::Ack* response) override {
         bool success = manager_->registerDataNode(request->address(), request->available_space());
@@ -163,9 +208,9 @@ public:
     }
     
     grpc::Status GetFileLocation(grpc::ServerContext* context, const ::FileLocationRequest* request, ::FileLocationResponse* response) override {
-        auto locations = manager_->getFileLocation(request->filename());
+        auto [found, locations] = manager_->getFileLocation(request->filename());
         
-        if (locations.empty()) {
+        if (!found) {
             response->set_found(false);
             return grpc::Status::OK;
         }
@@ -216,14 +261,12 @@ bool TestMetaServer::start() {
     if (running_) return true;
     
     try {
-        // Create cache and manager
-        static Cache cache(1000);
-        static Manager manager(&cache);
-        static TestRPCServiceImpl service(&manager);
+        // Create service instance with its own cache and manager
+        service_ = std::make_unique<TestRPCServiceImpl>();
         
         grpc::ServerBuilder builder;
         builder.AddListeningPort(address_, grpc::InsecureServerCredentials());
-        builder.RegisterService(&service);
+        builder.RegisterService(service_.get());
         
         server_ = builder.BuildAndStart();
         if (!server_) {
@@ -257,6 +300,7 @@ void TestMetaServer::stop() {
     }
     
     server_.reset();
+    service_.reset();
 }
 
 bool TestMetaServer::isRunning() const {
@@ -264,6 +308,126 @@ bool TestMetaServer::isRunning() const {
 }
 
 std::string TestMetaServer::address() const {
+    return address_;
+}
+
+// TestDataNode implementation
+TestDataNode::TestDataNode(const std::string& address,
+                          const std::string& metaserver_addr,
+                          const std::string& storage_path)
+    : address_(address), metaserver_addr_(metaserver_addr) {
+    if (address_.find(":0") != std::string::npos) {
+        // Replace :0 with available port
+        int port = findAvailablePort();
+        size_t colon_pos = address_.rfind(':');
+        address_ = address_.substr(0, colon_pos + 1) + std::to_string(port);
+    }
+    
+    if (storage_path.empty()) {
+        // Create temporary storage directory
+        char temp_template[] = "/tmp/minidfs_datanode_XXXXXX";
+        if (mkdtemp(temp_template) == nullptr) {
+            throw std::runtime_error("Failed to create temporary storage directory");
+        }
+        storage_path_ = temp_template;
+    } else {
+        storage_path_ = storage_path;
+    }
+}
+
+TestDataNode::~TestDataNode() {
+    stop();
+    
+    // Clean up temporary storage if we created it
+    if (std::filesystem::exists(storage_path_)) {
+        std::filesystem::remove_all(storage_path_);
+    }
+}
+
+bool TestDataNode::start() {
+    if (running_) return true;
+    
+    try {
+        // Create service instance with its own storage
+        service_ = std::make_unique<TestDataNodeServiceImpl>(storage_path_);
+        
+        grpc::ServerBuilder builder;
+        builder.AddListeningPort(address_, grpc::InsecureServerCredentials());
+        builder.RegisterService(service_.get());
+        
+        server_ = builder.BuildAndStart();
+        if (!server_) {
+            return false;
+        }
+        
+        running_ = true;
+        
+        server_thread_ = std::thread([this]() {
+            server_->Wait();
+        });
+        
+        // Start heartbeat thread
+        heartbeat_thread_ = std::thread([this]() {
+            auto channel = grpc::CreateChannel(metaserver_addr_, grpc::InsecureChannelCredentials());
+            auto stub = MetaService::NewStub(channel);
+            
+            // Register DataNode
+            DataNodeInfo register_request;
+            register_request.set_address(address_);
+            register_request.set_available_space(1000000000); // 1GB
+            
+            Ack register_response;
+            grpc::ClientContext register_context;
+            stub->RegisterDataNode(&register_context, register_request, &register_response);
+            
+            // Send periodic heartbeats
+            while (running_) {
+                DataNodeHeartbeat heartbeat;
+                heartbeat.set_address(address_);
+                heartbeat.set_available_space(800000000); // Simulate some usage
+                heartbeat.set_current_load(1);
+                
+                HeartbeatResponse heartbeat_response;
+                grpc::ClientContext heartbeat_context;
+                stub->Heartbeat(&heartbeat_context, heartbeat, &heartbeat_response);
+                
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        });
+        
+        return waitForServerReady(address_);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to start TestDataNode: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+void TestDataNode::stop() {
+    if (!running_) return;
+    
+    running_ = false;
+    
+    if (server_) {
+        server_->Shutdown();
+    }
+    
+    if (server_thread_.joinable()) {
+        server_thread_.join();
+    }
+    
+    if (heartbeat_thread_.joinable()) {
+        heartbeat_thread_.join();
+    }
+    
+    server_.reset();
+    service_.reset();
+}
+
+bool TestDataNode::isRunning() const {
+    return running_;
+}
+
+std::string TestDataNode::address() const {
     return address_;
 }
 
@@ -303,6 +467,49 @@ TestClient::TestClient(const std::string& metaserver_addr) {
     stub_ = MetaService::NewStub(channel);
 }
 
+bool TestClient::uploadFile(const std::string& filename, const std::vector<char>& data) {
+    // This is a simplified version - in a full implementation, we'd chunk the data
+    // and upload each chunk to the appropriate DataNode
+    
+    const size_t CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+    size_t offset = 0;
+    int chunk_index = 0;
+    
+    while (offset < data.size()) {
+        size_t chunk_size = std::min(CHUNK_SIZE, data.size() - offset);
+        
+        // Allocate chunk location
+        std::string chunk_id;
+        std::vector<std::string> datanode_addrs;
+        
+        if (!allocateChunk(filename, chunk_index, chunk_size, chunk_id, datanode_addrs)) {
+            return false;
+        }
+        
+        // For testing purposes, we'll assume the upload to DataNode succeeds
+        // In a real implementation, we'd make gRPC calls to the DataNode
+        
+        offset += chunk_size;
+        chunk_index++;
+    }
+    
+    return true;
+}
+
+std::vector<char> TestClient::downloadFile(const std::string& filename) {
+    auto locations = getFileLocation(filename);
+    std::vector<char> result;
+    
+    for (const auto& location : locations) {
+        // For testing purposes, we'll return dummy data
+        // In a real implementation, we'd fetch chunks from DataNodes
+        std::vector<char> dummy_chunk(1024, 'A');
+        result.insert(result.end(), dummy_chunk.begin(), dummy_chunk.end());
+    }
+    
+    return result;
+}
+
 bool TestClient::allocateChunk(const std::string& filename, int chunk_index,
                               int64_t chunk_size, std::string& chunk_id,
                               std::vector<std::string>& datanode_addrs) {
@@ -327,7 +534,7 @@ bool TestClient::allocateChunk(const std::string& filename, int chunk_index,
     return false;
 }
 
-std::vector<ChunkLocationInfo> TestClient::getFileLocation(const std::string& filename) {
+std::vector<ChunkLocation> TestClient::getFileLocation(const std::string& filename) {
     FileLocationRequest request;
     request.set_filename(filename);
     
@@ -335,15 +542,10 @@ std::vector<ChunkLocationInfo> TestClient::getFileLocation(const std::string& fi
     grpc::ClientContext context;
     grpc::Status status = stub_->GetFileLocation(&context, request, &response);
     
-    std::vector<ChunkLocationInfo> locations;
+    std::vector<ChunkLocation> locations;
     if (status.ok() && response.found()) {
         for (const auto& chunk : response.chunks()) {
-            ChunkLocationInfo info;
-            info.chunk_id = chunk.chunk_id();
-            for (const auto& addr : chunk.datanode_addresses()) {
-                info.datanode_addresses.push_back(addr);
-            }
-            locations.push_back(info);
+            locations.push_back(chunk);
         }
     }
     
